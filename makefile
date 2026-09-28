@@ -9,7 +9,7 @@ BIN := ghostty-panel
 BUILD := ./build.sh
 
 .DEFAULT_GOAL := all
-.PHONY: all release debug run install uninstall clean distclean lint fetch help
+.PHONY: all release debug run install uninstall clean distclean lint vendor fetch help
 
 all: release    ## optimized build into ./zig-out (default)
 
@@ -32,11 +32,15 @@ uninstall:      ## remove the installed binary
 clean:          ## remove build outputs and caches
 	$(BUILD) clean
 
-distclean: clean ## clean, and remove the unpacked zig toolchain
+distclean: clean ## clean, and remove the unpacked zig toolchain and fetched vendor/
 	rm -rf .toolchain
+	find vendor -mindepth 1 -maxdepth 1 ! -name MANIFEST -exec rm -rf {} +
 
 lint: debug     ## compile the sources with all warnings enabled
 	./tools/lint.sh
+
+vendor:         ## (re)fetch vendor/ from vendor/MANIFEST (needs network)
+	./tools/fetch-vendor.sh
 
 fetch:          ## refresh zig-pkg after changing the ghostty pin (needs network)
 	./tools/fetch-zig-packages.sh

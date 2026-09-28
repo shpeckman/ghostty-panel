@@ -2,16 +2,24 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-zig_version=0.16.0
 
 case "$(uname -m)" in
-    x86_64 | amd64) arch=x86_64 sha256=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00 ;;
-    aarch64 | arm64) arch=aarch64 sha256=ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17 ;;
+    x86_64 | amd64) arch=x86_64 ;;
+    aarch64 | arm64) arch=aarch64 ;;
     *) echo "build.sh: unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
-name="zig-$arch-linux-$zig_version"
-tarball="$root/vendor/zig/$name.tar.xz"
+read -r zig_version dest checksum <<EOF
+$(awk -v arch="$arch" '$1 == "zig" && $3 == arch { print $4, $5, $8 }' "$root/vendor/MANIFEST")
+EOF
+if [ -z "${dest:-}" ]; then
+    echo "build.sh: no zig entry for $arch in vendor/MANIFEST" >&2
+    exit 1
+fi
+
+sha256=${checksum#sha256:}
+name=$(basename "$dest" .tar.xz)
+tarball="$root/vendor/$dest"
 toolchain="$root/.toolchain/$name"
 zig="$toolchain/zig"
 cache="$root/.zig-global-cache"
@@ -20,7 +28,7 @@ ensure_zig() {
     [ -x "$zig" ] && return 0
     if [ ! -f "$tarball" ]; then
         echo "build.sh: missing $tarball" >&2
-        echo "build.sh: fetch it with: curl -fLo '$tarball' https://ziglang.org/download/$zig_version/$name.tar.xz" >&2
+        echo "build.sh: fetch it with: ./tools/fetch-vendor.sh zig" >&2
         exit 1
     fi
     actual=$(sha256sum "$tarball" | cut -d' ' -f1)
