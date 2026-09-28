@@ -7,16 +7,17 @@ ARGS ?=
 
 BIN := ghostty-panel
 BUILD := ./build.sh
+STAMP := vendor/.stamp
 
 .DEFAULT_GOAL := all
 .PHONY: all release debug run install uninstall clean distclean lint vendor fetch help
 
 all: release    ## optimized build into ./zig-out (default)
 
-release:        ## optimized build into ./zig-out
+release: $(STAMP) ## optimized build into ./zig-out
 	$(BUILD) release
 
-debug:          ## debug build into ./zig-out
+debug: $(STAMP) ## debug build into ./zig-out
 	$(BUILD) debug
 
 run: release    ## optimized build, then run with ARGS="..."
@@ -39,10 +40,15 @@ distclean: clean ## clean, and remove the unpacked zig toolchain and fetched ven
 lint: debug     ## compile the sources with all warnings enabled
 	./tools/lint.sh
 
-vendor:         ## (re)fetch vendor/ from vendor/MANIFEST (needs network)
+$(STAMP): vendor/MANIFEST
 	./tools/fetch-vendor.sh
+	touch $@
 
-fetch:          ## refresh zig-pkg after changing the ghostty pin (needs network)
+vendor:         ## force a refetch of vendor/ from vendor/MANIFEST (needs network)
+	rm -f $(STAMP)
+	$(MAKE) $(STAMP)
+
+fetch: $(STAMP) ## refresh zig-pkg after changing the ghostty pin (needs network)
 	./tools/fetch-zig-packages.sh
 
 help:           ## show this help
