@@ -1,0 +1,5 @@
+# .gitignore
+/.toolchain/
+/.zig-cache/
+/.zig-global-cache/
+/zig-out/

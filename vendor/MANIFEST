@@ -1,0 +1,15 @@
+# vendor/MANIFEST
+component          version                                    source                                                                                         checksum
+zig                0.16.0                                     https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz                             sha256:70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+ghostty            f64f4aca2c29b554d111b36c3d946a9bddd159ff   https://github.com/ghostty-org/ghostty                                                         git:f64f4aca2c29b554d111b36c3d946a9bddd159ff
+wayland            9cb3d7aa9dc995ffafdbdef7ab86a949d0fb0e7d   https://deps.files.ghostty.org/wayland-9cb3d7aa9dc995ffafdbdef7ab86a949d0fb0e7d.tar.gz         sha256:ea4191d68e437677e51f3aacde27829810144e931d397a327dc6035e2c39c50d
+wayland-protocols  1.47                                       https://deps.files.ghostty.org/N-V-__8AAFdWDwA0ktbNUi9pFBHCRN4weXIgIfCrVjfGxqgA.tar.gz         sha256:dd2df14ab5f41038257aaedcc4b5fb9ac0ee018f3f0f94af9097028e60d33223
+wlr-protocols      ffb89ac790096f6e6272822c8d5df7d0cc6fcdfa   https://gitlab.freedesktop.org/wlroots/wlr-protocols                                           sha256:8d5f849e68ad597a72c5c68d69cb0126304254376136b689c25186ff396cff5b
+expat              2.7.1                                      https://github.com/libexpat/libexpat/releases/download/R_2_7_1/expat-2.7.1.tar.gz              sha256:0cce2e6e69b327fc607b8ff264f4b66bdf71ead55a87ffd5f3143f535f15cfa2
+libxkbcommon       1.11.0                                     https://github.com/xkbcommon/libxkbcommon                                                      git:0f9cefb1fedb23433666fa5d9045e48ff030c006
+khronos-egl        db3425b8246136faccb5e2782b5694960bd6edf1   https://github.com/KhronosGroup/EGL-Registry                                                   git:db3425b8246136faccb5e2782b5694960bd6edf1
+khronos-gles2      1cdd228e34966dd6b95bd203e9f84faba0f371a1   https://github.com/KhronosGroup/OpenGL-Registry                                                git:1cdd228e34966dd6b95bd203e9f84faba0f371a1
+
+pruned: ghostty/{macos,images,test,example,flatpak,snap,.github} wayland/{tests,doc,cursor} expat/{doc,tests,fuzz,win32,xmlwf,examples,m4,conftools,cmake,configure,expat_config.h} libxkbcommon/{test,doc,bench,fuzz,tools,changes}
+generated: libxkbcommon/generated/parser.{c,h} from src/xkbcomp/parser.y with bison 3.8.2 (bison --defines=generated/parser.h -o generated/parser.c -p _xkbcommon_ src/xkbcomp/parser.y)
+zig-pkg: packages resolved by content hash from the build.zig.zon files under vendor/ghostty, refreshed with tools/fetch-zig-packages.sh
