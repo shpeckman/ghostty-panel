@@ -34,7 +34,7 @@ clean:          ## remove build outputs and caches
 	$(BUILD) clean
 
 distclean: clean ## clean, and remove the unpacked zig toolchain and fetched vendor/
-	rm -rf .toolchain
+	rm -rf .toolchain zig-pkg
 	find vendor -mindepth 1 -maxdepth 1 ! -name MANIFEST -exec rm -rf {} +
 
 lint: debug     ## compile the sources with all warnings enabled
