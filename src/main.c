@@ -9,6 +9,8 @@
 #include "image.h"
 #include "rc.h"
 
+static const char service_name[] = "ghostty-panel-service";
+
 static void detach(const char *log_path)
 {
     pid_t pid = fork();
@@ -30,6 +32,30 @@ static void detach(const char *log_path)
     if (out > 2) close(out);
 }
 
+static void notify_ready(void)
+{
+    const char *env = getenv("NOTIFY_SOCKET");
+    if (!env || !*env) return;
+    char *path = xstrdup(env);
+    unsetenv("NOTIFY_SOCKET");
+    struct sockaddr_un sa;
+    socklen_t len;
+    int fd = unix_sockaddr(path, &sa, &len) ? socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0) : -1;
+    static const char ready[] = "READY=1";
+    if (fd < 0 || sendto(fd, ready, sizeof ready - 1, MSG_NOSIGNAL, (struct sockaddr *)&sa, len) < 0)
+        log_msg("cannot notify the service manager through %s", path);
+    if (fd >= 0) close(fd);
+    free(path);
+}
+
+static bool start_app(App *app, const StrList *config, const StrList *override, char *err, size_t errlen)
+{
+    image_install_png_decoder();
+    config_defaults(&app->cfg);
+    config_load(&app->cfg, config, override);
+    return app_connect(app, err, errlen) && app_init_egl(app, err, errlen);
+}
+
 static bool start_listening(App *app, const PanelOptions *opts)
 {
     const char *address = opts->listen_on;
@@ -45,7 +71,7 @@ static bool start_listening(App *app, const PanelOptions *opts)
         return true;
     }
     char *resolved = rc_resolve_address(address);
-    if (!rc_server_listen(app->rc, resolved, err, sizeof err)) {
+    if (!rc_server_listen(app->rc, resolved, false, err, sizeof err)) {
         log_msg("%s", err);
         free(resolved);
         return false;
@@ -54,10 +80,52 @@ static bool start_listening(App *app, const PanelOptions *opts)
     return true;
 }
 
-int main(int argc, char **argv)
+static int service_main(int argc, char **argv)
 {
-    if (argc > 1 && strcmp(argv[1], "@") == 0) return rc_client_main(argc - 2, argv + 2);
+    ServiceOptions opts;
+    cli_defaults(&service_options_table, &opts);
+    char err[512] = {0};
+    int first = cli_parse(&service_options_table, &opts, argc, argv, NULL, err, sizeof err);
+    int code = 1;
+    if (first == CLI_HELP) {
+        cli_print_help(&service_options_table, service_name, stdout);
+        code = 0;
+        goto done;
+    }
+    if (first == CLI_ERROR || first < argc) {
+        fprintf(stderr, "%s: %s\n", service_name, first == CLI_ERROR ? err : "unexpected argument");
+        goto done;
+    }
+    log_set_debug(opts.debug_rendering, opts.debug_input);
+    if (!dynload_init(err, sizeof err)) {
+        fprintf(stderr, "%s: %s\n", service_name, err);
+        goto done;
+    }
+    App app = {.persistent = true};
+    if (!start_app(&app, &opts.config, &opts.override, err, sizeof err)) {
+        log_msg("%s", err);
+        goto out;
+    }
+    char *address = opts.listen_on && *opts.listen_on ? rc_resolve_address(opts.listen_on) : rc_service_address();
+    app.rc = rc_server_new(&app);
+    if (!rc_server_listen(app.rc, address, true, err, sizeof err)) {
+        log_msg("%s", err);
+        free(address);
+        goto out;
+    }
+    app.listen_on = address;
+    log_msg("listening on %s", address);
+    notify_ready();
+    code = app_run(&app);
+out:
+    app_disconnect(&app);
+done:
+    cli_free(&service_options_table, &opts);
+    return code;
+}
 
+static int panel_main(int argc, char **argv)
+{
     PanelOptions opts;
     cli_defaults(&panel_options_table, &opts);
     char err[512] = {0};
@@ -88,13 +156,9 @@ int main(int argc, char **argv)
     }
     if (opts.detach) detach(opts.detached_log);
 
-    image_install_png_decoder();
     App app = {0};
-    config_defaults(&app.cfg);
-    config_load(&app.cfg, &opts.config, &opts.override);
-
     int code = 1;
-    if (!app_connect(&app, err, sizeof err) || !app_init_egl(&app, err, sizeof err)) {
+    if (!start_app(&app, &opts.config, &opts.override, err, sizeof err)) {
         log_msg("%s", err);
         goto out;
     }
@@ -105,6 +169,7 @@ int main(int argc, char **argv)
     PanelSpec spec = {
         .lsc = layer_config_from_options(&opts),
         .app_id = opts.app_id,
+        .name = opts.name,
         .argv = &items,
         .cwd = NULL,
         .env = NULL,
@@ -123,4 +188,13 @@ out:
     app_disconnect(&app);
     cli_free(&panel_options_table, &opts);
     return code;
+}
+
+int main(int argc, char **argv)
+{
+    const char *slash = argc > 0 ? strrchr(argv[0], '/') : NULL;
+    const char *prog = slash ? slash + 1 : argc > 0 ? argv[0] : "";
+    if (strcmp(prog, service_name) == 0) return service_main(argc - 1, argv + 1);
+    if (argc > 1 && strcmp(argv[1], "@") == 0) return rc_client_main(argc - 2, argv + 2);
+    return panel_main(argc, argv);
 }

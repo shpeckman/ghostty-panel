@@ -59,7 +59,8 @@ usage: ./build.sh [command]
 commands:
   release            optimized build into ./zig-out (default)
   debug              debug build into ./zig-out
-  install [PREFIX]   optimized build installed to PREFIX (default: \$HOME/.local)
+  install [PREFIX]   optimized build installed to PREFIX (default: \$HOME/.local),
+                     with the systemd user unit in PREFIX/share/systemd/user
   run [ARGS...]      optimized build, then run ghostty-panel with ARGS
   clean              remove build outputs and caches
   zig [ARGS...]      run the vendored zig $zig_version
@@ -72,7 +73,11 @@ cmd=${1:-release}
 case "$cmd" in
     release) zig_build -Doptimize=ReleaseFast --prefix "$root/zig-out" ;;
     debug) zig_build -Doptimize=Debug --prefix "$root/zig-out" ;;
-    install) zig_build -Doptimize=ReleaseFast --prefix "${1:-$HOME/.local}" ;;
+    install)
+        prefix=${1:-$HOME/.local}
+        zig_build -Doptimize=ReleaseFast --prefix "$root/zig-out"
+        "$root/tools/install.sh" install "$prefix/bin" "$prefix/share/systemd/user"
+        ;;
     run) zig_build -Doptimize=ReleaseFast --prefix "$root/zig-out" && exec "$root/zig-out/bin/ghostty-panel" "$@" ;;
     clean) rm -rf "$root/.zig-cache" "$root/zig-out" "$cache" ;;
     zig) ensure_zig && exec "$zig" "$@" ;;

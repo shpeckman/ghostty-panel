@@ -444,6 +444,7 @@ Panel *panel_new(App *app, const PanelSpec *spec, char *err, size_t errlen)
     config_copy(&p->cfg, spec->cfg);
     p->lsc = spec->lsc;
     p->app_id = xstrdup(spec->app_id && *spec->app_id ? spec->app_id : "ghostty-panel");
+    p->name = spec->name && *spec->name ? xstrdup(spec->name) : NULL;
     p->hold = spec->hold;
     p->grab_keyboard = spec->grab_keyboard;
     p->pty_fd = -1;
@@ -591,6 +592,7 @@ void panel_free(Panel *p)
     buf_free(&p->pty_out);
     config_free(&p->cfg);
     free(p->app_id);
+    free(p->name);
     free(p);
 }
 

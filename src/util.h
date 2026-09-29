@@ -6,6 +6,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 #define ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -60,3 +62,4 @@ void log_debug(bool enabled, const char *fmt, ...) __attribute__((format(printf,
 
 bool set_nonblocking(int fd);
 bool write_all(int fd, const void *data, size_t len);
+bool unix_sockaddr(const char *path, struct sockaddr_un *sa, socklen_t *len);

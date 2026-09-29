@@ -138,8 +138,19 @@ typedef struct {
 
 extern const OptTable panel_options_table;
 
+typedef struct {
+    StrList config;
+    StrList override;
+    char *listen_on;
+    bool debug_rendering;
+    bool debug_input;
+} ServiceOptions;
+
+extern const OptTable service_options_table;
+
 LayerConfig layer_config_from_options(const PanelOptions *o);
 uint32_t layer_config_fields_seen(uint64_t seen);
 void layer_config_merge(LayerConfig *dst, const LayerConfig *src, uint32_t fields);
 bool layer_config_equal(const LayerConfig *a, const LayerConfig *b);
 bool layer_config_from_settings(const StrList *settings, const LayerConfig *base, bool incremental, LayerConfig *out, char *err, size_t errlen);
+void layer_config_to_settings(const LayerConfig *c, StrList *out);

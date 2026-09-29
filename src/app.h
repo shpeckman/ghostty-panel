@@ -88,6 +88,7 @@ typedef struct {
 typedef struct {
     LayerConfig lsc;
     const char *app_id;
+    const char *name;
     const StrList *argv;
     const char *cwd;
     const StrList *env;
@@ -103,6 +104,7 @@ struct Panel {
     Config cfg;
     LayerConfig lsc;
     char *app_id;
+    char *name;
     bool hold;
     bool grab_keyboard;
     bool visible;
@@ -193,6 +195,7 @@ struct App {
     size_t nwatches;
     size_t watches_cap;
     bool running;
+    bool persistent;
     int exit_code;
 };
 

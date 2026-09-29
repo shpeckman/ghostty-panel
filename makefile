@@ -1,8 +1,8 @@
 # Makefile
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
+UNITDIR ?= $(PREFIX)/lib/systemd/user
 DESTDIR ?=
-INSTALL ?= install
 ARGS ?=
 
 BIN := ghostty-panel
@@ -23,12 +23,11 @@ debug: $(STAMP) ## debug build into ./zig-out
 run: release    ## optimized build, then run with ARGS="..."
 	./zig-out/bin/$(BIN) $(ARGS)
 
-install: release ## install to $(DESTDIR)$(BINDIR), default /usr/local/bin
-	$(INSTALL) -d "$(DESTDIR)$(BINDIR)"
-	$(INSTALL) -m 755 zig-out/bin/$(BIN) "$(DESTDIR)$(BINDIR)/$(BIN)"
+install: release ## install the binary, the service link and the systemd user unit
+	DESTDIR="$(DESTDIR)" ./tools/install.sh install "$(BINDIR)" "$(UNITDIR)"
 
-uninstall:      ## remove the installed binary
-	rm -f "$(DESTDIR)$(BINDIR)/$(BIN)"
+uninstall:      ## remove the installed files
+	DESTDIR="$(DESTDIR)" ./tools/install.sh uninstall "$(BINDIR)" "$(UNITDIR)"
 
 clean:          ## remove build outputs and caches
 	$(BUILD) clean

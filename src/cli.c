@@ -11,6 +11,16 @@ static const char *const layer_choices[] = {"background", "bottom", "top", "over
 static const char *const focus_choices[] = {"not-allowed", "exclusive", "on-demand", NULL};
 
 #define PO(field) offsetof(PanelOptions, field)
+#define SO(field) offsetof(ServiceOptions, field)
+
+#define OPT_CONFIG(off)                                                                                                    \
+    {"--config -c", OPT_LIST, off, NULL, NULL, "config", 0,                                                                \
+     "Path to a config file to use for the panel. Can be given multiple times. NONE disables loading the default config file."}
+#define OPT_OVERRIDE(off)                                                                                                  \
+    {"--override -o", OPT_LIST, off, NULL, NULL, "override", 0,                                                            \
+     "Override an individual configuration option, can be given multiple times. Syntax: name=value, e.g. -o font_size=20"}
+#define OPT_DEBUG_RENDERING(off) {"--debug-rendering", OPT_FLAG, off, NULL, NULL, "debug_rendering", 0, "Log rendering related debug information."}
+#define OPT_DEBUG_INPUT(off) {"--debug-input", OPT_FLAG, off, NULL, NULL, "debug_input", 0, "Log input related debug information."}
 
 static const OptSpec panel_specs[] = {
     {"--lines", OPT_STR, PO(lines), NULL, "1", "lines", LSC_Y_SIZE,
@@ -33,16 +43,14 @@ static const OptSpec panel_specs[] = {
      "place it with the margins and size it with --lines and --columns. center-sized is like none but centered."},
     {"--layer", OPT_CHOICE, PO(layer), layer_choices, "bottom", "layer", LSC_LAYER,
      "The layer shell layer the panel is drawn on. Ignored and set to background when --edge=background."},
-    {"--config -c", OPT_LIST, PO(config), NULL, NULL, "config", 0,
-     "Path to a config file to use for the panel. Can be given multiple times. NONE disables loading the default config file."},
-    {"--override -o", OPT_LIST, PO(override), NULL, NULL, "override", 0,
-     "Override an individual configuration option, can be given multiple times. Syntax: name=value, e.g. -o font_size=20"},
+    OPT_CONFIG(PO(config)),
+    OPT_OVERRIDE(PO(override)),
     {"--output-name", OPT_STR, PO(output_name), NULL, NULL, "output_name", LSC_OUTPUT,
      "The output (monitor) to show the panel on, by name. Use list to print the available outputs, listjson for JSON."},
     {"--class --app-id", OPT_STR, PO(app_id), NULL, "ghostty-panel", "app_id", 0,
      "The namespace of the layer shell surface."},
     {"--name --os-window-tag", OPT_STR, PO(name), NULL, NULL, "name", 0,
-     "Accepted for compatibility with the kitty panel kitten, has no effect on Wayland."},
+     "A name for the panel. Remote control commands select it with --match name:NAME."},
     {"--focus-policy", OPT_CHOICE, PO(focus_policy), focus_choices, "not-allowed", "focus_policy", LSC_FOCUS,
      "The keyboard interactivity of the panel."},
     {"--hide-on-focus-loss", OPT_FLAG, PO(hide_on_focus_loss), NULL, NULL, "hide_on_focus_loss", LSC_HIDE_ON_FOCUS_LOSS,
@@ -75,10 +83,8 @@ static const OptSpec panel_specs[] = {
      "Detach from the controlling terminal and run in the background."},
     {"--detached-log", OPT_STR, PO(detached_log), NULL, NULL, "detached_log", 0,
      "Path to a log file for stdout and stderr when using --detach."},
-    {"--debug-rendering", OPT_FLAG, PO(debug_rendering), NULL, NULL, "debug_rendering", 0,
-     "Log rendering related debug information."},
-    {"--debug-input", OPT_FLAG, PO(debug_input), NULL, NULL, "debug_input", 0,
-     "Log input related debug information."},
+    OPT_DEBUG_RENDERING(PO(debug_rendering)),
+    OPT_DEBUG_INPUT(PO(debug_input)),
 };
 
 const OptTable panel_options_table = {
@@ -87,6 +93,24 @@ const OptTable panel_options_table = {
     .usage = "[options] [cmdline-to-run ...]",
     .help = "Use a command line program to draw a GPU accelerated panel on your Wayland desktop.",
     .positional_json = "args",
+};
+
+static const OptSpec service_specs[] = {
+    OPT_CONFIG(SO(config)),
+    OPT_OVERRIDE(SO(override)),
+    {"--listen-on", OPT_STR, SO(listen_on), NULL, NULL, "listen_on", 0,
+     "The socket address to listen on for clients. Defaults to unix:$XDG_RUNTIME_DIR/ghostty-panel.sock, or an abstract "
+     "socket when XDG_RUNTIME_DIR is not set. Unix sockets only accept clients of the same user."},
+    OPT_DEBUG_RENDERING(SO(debug_rendering)),
+    OPT_DEBUG_INPUT(SO(debug_input)),
+};
+
+const OptTable service_options_table = {
+    .specs = service_specs,
+    .count = ARRAY_LEN(service_specs),
+    .usage = "[options]",
+    .help = "Run the panel service. It starts without panels and keeps running when all panels are closed. "
+            "Manage panels with ghostty-panel @ launch --type=os-panel, resize-os-window, close-window and ls.",
 };
 
 static bool name_matches(const char *names, const char *arg, size_t arglen)
@@ -468,4 +492,22 @@ bool layer_config_from_settings(const StrList *settings, const LayerConfig *base
     cli_free(&panel_options_table, &opts);
     strlist_clear(&args);
     return ok;
+}
+
+void layer_config_to_settings(const LayerConfig *c, StrList *out)
+{
+    static const char *const flag[] = {"no", "yes"};
+    strlist_push_owned(out, xasprintf("edge=%s", edge_choices[c->edge]));
+    strlist_push_owned(out, xasprintf("layer=%s", layer_choices[c->layer]));
+    strlist_push_owned(out, c->y_px ? xasprintf("lines=%upx", c->y_px) : xasprintf("lines=%u", c->y_cells));
+    strlist_push_owned(out, c->x_px ? xasprintf("columns=%upx", c->x_px) : xasprintf("columns=%u", c->x_cells));
+    strlist_push_owned(out, xasprintf("margin-top=%d", c->margin_top));
+    strlist_push_owned(out, xasprintf("margin-left=%d", c->margin_left));
+    strlist_push_owned(out, xasprintf("margin-bottom=%d", c->margin_bottom));
+    strlist_push_owned(out, xasprintf("margin-right=%d", c->margin_right));
+    strlist_push_owned(out, xasprintf("focus-policy=%s", focus_choices[c->focus_policy]));
+    strlist_push_owned(out, xasprintf("hide-on-focus-loss=%s", flag[c->hide_on_focus_loss]));
+    strlist_push_owned(out, xasprintf("exclusive-zone=%d", c->exclusive_zone));
+    strlist_push_owned(out, xasprintf("override-exclusive-zone=%s", flag[c->override_exclusive_zone]));
+    if (c->output_name[0]) strlist_push_owned(out, xasprintf("output-name=%s", c->output_name));
 }

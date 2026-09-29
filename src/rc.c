@@ -26,6 +26,7 @@ typedef enum {
 typedef struct {
     int fd;
     ListenKind kind;
+    bool same_user;
     char *unlink_path;
 } Listener;
 
@@ -80,20 +81,16 @@ char *rc_resolve_address(const char *address)
     return s;
 }
 
-static bool unix_address(const char *path, struct sockaddr_un *sa, socklen_t *len)
+char *rc_service_address(void)
 {
-    memset(sa, 0, sizeof *sa);
-    sa->sun_family = AF_UNIX;
-    size_t n = strlen(path);
-    if (n + 1 > sizeof sa->sun_path) return false;
-    if (path[0] == '@') {
-        memcpy(sa->sun_path + 1, path + 1, n - 1);
-        *len = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + n);
-    } else {
-        memcpy(sa->sun_path, path, n);
-        *len = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + n + 1);
-    }
-    return true;
+    const char *runtime = getenv("XDG_RUNTIME_DIR");
+    if (runtime && *runtime) return xasprintf("unix:%s/ghostty-panel.sock", runtime);
+    return xasprintf("unix:@ghostty-panel-service-%u", (unsigned)getuid());
+}
+
+static bool is_unix_address(const char *address)
+{
+    return strncmp(address, "unix:", 5) == 0;
 }
 
 static int tcp_socket(const char *hostport, bool listening, char *err, size_t errlen)
@@ -132,13 +129,13 @@ static int tcp_socket(const char *hostport, bool listening, char *err, size_t er
 static int connect_address(const char *address, char *err, size_t errlen)
 {
     if (strncmp(address, "tcp:", 4) == 0) return tcp_socket(address + 4, false, err, errlen);
-    if (strncmp(address, "unix:", 5) != 0) {
+    if (!is_unix_address(address)) {
         snprintf(err, errlen, "unsupported address: %s", address);
         return -1;
     }
     struct sockaddr_un sa;
     socklen_t len;
-    if (!unix_address(address + 5, &sa, &len)) {
+    if (!unix_sockaddr(address + 5, &sa, &len)) {
         snprintf(err, errlen, "socket path too long: %s", address);
         return -1;
     }
@@ -155,14 +152,14 @@ static int listen_address(const char *address, char **unlink_path, char *err, si
 {
     *unlink_path = NULL;
     if (strncmp(address, "tcp:", 4) == 0) return tcp_socket(address + 4, true, err, errlen);
-    if (strncmp(address, "unix:", 5) != 0) {
+    if (!is_unix_address(address)) {
         snprintf(err, errlen, "unsupported address: %s", address);
         return -1;
     }
     const char *path = address + 5;
     struct sockaddr_un sa;
     socklen_t len;
-    if (!unix_address(path, &sa, &len)) {
+    if (!unix_sockaddr(path, &sa, &len)) {
         snprintf(err, errlen, "socket path too long: %s", address);
         return -1;
     }
@@ -221,19 +218,22 @@ RcServer *rc_server_new(App *app)
     return s;
 }
 
-static void add_listener(RcServer *s, int fd, ListenKind kind, char *unlink_path)
+static void add_listener(RcServer *s, int fd, ListenKind kind, bool same_user, char *unlink_path)
 {
     set_nonblocking(fd);
-    s->listeners[s->nlisteners++] = (Listener){.fd = fd, .kind = kind, .unlink_path = unlink_path};
+    s->listeners[s->nlisteners++] = (Listener){.fd = fd, .kind = kind, .same_user = same_user, .unlink_path = unlink_path};
 }
 
-bool rc_server_listen(RcServer *s, const char *address, char *err, size_t errlen)
+bool rc_server_listen(RcServer *s, const char *address, bool same_user, char *err, size_t errlen)
 {
-    if (s->nlisteners >= ARRAY_LEN(s->listeners)) return false;
+    if (s->nlisteners >= ARRAY_LEN(s->listeners)) {
+        snprintf(err, errlen, "too many listening sockets");
+        return false;
+    }
     char *path = NULL;
     int fd = listen_address(address, &path, err, errlen);
     if (fd < 0) return false;
-    add_listener(s, fd, LISTEN_RC, path);
+    add_listener(s, fd, LISTEN_RC, same_user && is_unix_address(address), path);
     return true;
 }
 
@@ -244,7 +244,7 @@ bool rc_server_listen_single_instance(RcServer *s, const char *group, char *err,
     int fd = listen_address(address, &path, err, errlen);
     free(address);
     if (fd < 0) return false;
-    add_listener(s, fd, LISTEN_SINGLE_INSTANCE, path);
+    add_listener(s, fd, LISTEN_SINGLE_INSTANCE, true, path);
     return true;
 }
 
@@ -311,6 +311,9 @@ static size_t match_panels(RcServer *s, const Json *msg, const Json *payload, Pa
         if (p) list[n++] = p;
     } else if (strcmp(match, "all") == 0) {
         for (size_t i = 0; i < app->npanels; i++) list[n++] = app->panels[i];
+    } else if (strncmp(match, "name:", 5) == 0) {
+        for (size_t i = 0; i < app->npanels; i++)
+            if (app->panels[i]->name && strcmp(app->panels[i]->name, match + 5) == 0) list[n++] = app->panels[i];
     } else if (strncmp(match, "id:", 3) == 0) {
         long id;
         if (!parse_long(match + 3, &id)) {
@@ -321,7 +324,7 @@ static size_t match_panels(RcServer *s, const Json *msg, const Json *payload, Pa
         Panel *p = app_find_panel(app, (uint64_t)id);
         if (p) list[n++] = p;
     } else {
-        snprintf(err, errlen, "unsupported match expression: %s (use id:N or all)", match);
+        snprintf(err, errlen, "unsupported match expression: %s (use id:N, name:NAME or all)", match);
         free(list);
         return 0;
     }
@@ -392,6 +395,7 @@ static CmdResult cmd_launch(RcServer *s, Conn *c, const Json *msg, const Json *p
         PanelSpec spec = {
             .lsc = lsc,
             .app_id = json_get_string(payload, "os_window_class", NULL),
+            .name = json_get_string(payload, "os_window_name", NULL),
             .argv = &args,
             .cwd = cwd && *cwd && strcmp(cwd, "current") != 0 ? cwd : NULL,
             .env = &env,
@@ -408,6 +412,55 @@ static CmdResult cmd_launch(RcServer *s, Conn *c, const Json *msg, const Json *p
     strlist_clear(&args);
     strlist_clear(&env);
     return result;
+}
+
+static CmdResult cmd_close_window(RcServer *s, Conn *c, const Json *msg, const Json *payload, Buf *data, char *err, size_t errlen)
+{
+    Panel **panels = NULL;
+    size_t n = match_panels(s, msg, payload, &panels, err, errlen);
+    if (!n) return CMD_ERROR;
+    for (size_t i = 0; i < n; i++) app_remove_panel(s->app, panels[i]);
+    free(panels);
+    return CMD_OK;
+}
+
+static void write_panel(Buf *out, const Panel *p)
+{
+    buf_appendf(out, "{\"id\":%llu,\"name\":", (unsigned long long)p->id);
+    if (p->name) json_write_string(out, p->name);
+    else buf_append_str(out, "null");
+    buf_append_str(out, ",\"app_id\":");
+    json_write_string(out, p->app_id);
+    buf_appendf(out, ",\"pid\":%d,\"visible\":%s,\"focused\":%s,\"columns\":%u,\"lines\":%u,\"os_panel\":", (int)p->pid,
+                p->visible ? "true" : "false", p->focused ? "true" : "false", p->cols, p->rows);
+    StrList settings = {0};
+    layer_config_to_settings(&p->lsc, &settings);
+    json_write_string_list(out, &settings);
+    strlist_clear(&settings);
+    buf_append_str(out, "}");
+}
+
+static CmdResult cmd_ls(RcServer *s, Conn *c, const Json *msg, const Json *payload, Buf *data, char *err, size_t errlen)
+{
+    App *app = s->app;
+    const char *match = json_get_string(payload, "match", NULL);
+    Panel **panels = NULL;
+    size_t n = 0;
+    if (match && *match) {
+        n = match_panels(s, msg, payload, &panels, err, errlen);
+        if (!n) return CMD_ERROR;
+    } else {
+        panels = xcalloc(app->npanels + 1, sizeof(Panel *));
+        for (size_t i = 0; i < app->npanels; i++) panels[n++] = app->panels[i];
+    }
+    buf_append_str(data, "[");
+    for (size_t i = 0; i < n; i++) {
+        if (i) buf_append_str(data, ",");
+        write_panel(data, panels[i]);
+    }
+    buf_append_str(data, "]");
+    free(panels);
+    return CMD_OK;
 }
 
 static void waiter_panel_closed(void *ctx, Panel *p)
@@ -462,6 +515,7 @@ static CmdResult cmd_single_instance(RcServer *s, Conn *c, const Json *msg, cons
     PanelSpec spec = {
         .lsc = lsc,
         .app_id = opts.app_id,
+        .name = opts.name,
         .argv = &items,
         .cwd = json_get_string(payload, "cwd", NULL),
         .env = &env,
@@ -497,6 +551,8 @@ typedef struct {
 static const Command commands[] = {
     {"resize-os-window", LISTEN_RC, cmd_resize_os_window},
     {"launch", LISTEN_RC, cmd_launch},
+    {"close-window", LISTEN_RC, cmd_close_window},
+    {"ls", LISTEN_RC, cmd_ls},
     {"single-instance", LISTEN_SINGLE_INSTANCE, cmd_single_instance},
 };
 
@@ -578,13 +634,15 @@ static void on_conn(void *ctx, int fd, short revents)
 static void on_listener(void *ctx, int fd, short revents)
 {
     RcServer *s = ctx;
-    ListenKind kind = LISTEN_RC;
+    const Listener *listener = NULL;
     for (size_t i = 0; i < s->nlisteners; i++)
-        if (s->listeners[i].fd == fd) kind = s->listeners[i].kind;
+        if (s->listeners[i].fd == fd) listener = &s->listeners[i];
+    if (!listener) return;
+    ListenKind kind = listener->kind;
     for (;;) {
         int cfd = accept4(fd, NULL, NULL, SOCK_CLOEXEC | SOCK_NONBLOCK);
         if (cfd < 0) break;
-        if (kind == LISTEN_SINGLE_INSTANCE) {
+        if (listener->same_user) {
             struct ucred cred;
             socklen_t len = sizeof cred;
             if (getsockopt(cfd, SOL_SOCKET, SO_PEERCRED, &cred, &len) != 0 || cred.uid != getuid()) {
@@ -733,6 +791,16 @@ typedef struct {
 
 typedef struct {
     char *match;
+    bool self;
+    bool no_response;
+} CloseOptions;
+
+typedef struct {
+    char *match;
+} LsOptions;
+
+typedef struct {
+    char *match;
     int type;
     StrList os_panel;
     char *cwd;
@@ -750,9 +818,11 @@ static const char *const launch_types[] = {"window", "tab", "os-window", "os-pan
 
 #define RO(field) offsetof(ResizeOptions, field)
 #define LO(field) offsetof(LaunchOptions, field)
+#define CO(field) offsetof(CloseOptions, field)
+#define LSO(field) offsetof(LsOptions, field)
 
 static const OptSpec resize_specs[] = {
-    {"--match -m", OPT_STR, RO(match), NULL, NULL, "match", 0, "The panel to act on: id:N or all. Defaults to the active panel."},
+    {"--match -m", OPT_STR, RO(match), NULL, NULL, "match", 0, "The panel to act on: id:N, name:NAME or all. Defaults to the active panel."},
     {"--self", OPT_FLAG, RO(self), NULL, NULL, "self", 0, "Act on the panel this command is run in."},
     {"--action", OPT_CHOICE, RO(action), resize_actions, "resize", "action", 0,
      "The action to perform. Panels support toggle-visibility, hide, show and os-panel."},
@@ -773,9 +843,20 @@ static const OptSpec launch_specs[] = {
     {"--env", OPT_LIST, LO(env), NULL, NULL, "env", 0, "An environment variable NAME=VALUE for the program. Can be given multiple times."},
     {"--hold", OPT_FLAG, LO(hold), NULL, NULL, "hold", 0, "Keep the panel open after the program exits."},
     {"--os-window-class", OPT_STR, LO(os_window_class), NULL, NULL, "os_window_class", 0, "The layer shell namespace of the new panel."},
-    {"--os-window-name", OPT_STR, LO(os_window_name), NULL, NULL, "os_window_name", 0, "Accepted for compatibility with kitty."},
+    {"--os-window-name", OPT_STR, LO(os_window_name), NULL, NULL, "os_window_name", 0,
+     "A name for the new panel. Other commands select it with --match name:NAME."},
     {"--self", OPT_FLAG, LO(self), NULL, NULL, "self", 0, "Accepted for compatibility with kitty."},
     {"--no-response", OPT_FLAG, LO(no_response), NULL, NULL, NULL, 0, "Do not wait for a response."},
+};
+
+static const OptSpec close_specs[] = {
+    {"--match -m", OPT_STR, CO(match), NULL, NULL, "match", 0, "The panels to close: id:N, name:NAME or all. Defaults to the active panel."},
+    {"--self", OPT_FLAG, CO(self), NULL, NULL, "self", 0, "Close the panel this command is run in."},
+    {"--no-response", OPT_FLAG, CO(no_response), NULL, NULL, NULL, 0, "Do not wait for a response."},
+};
+
+static const OptSpec ls_specs[] = {
+    {"--match -m", OPT_STR, LSO(match), NULL, NULL, "match", 0, "The panels to list: id:N, name:NAME or all. Defaults to all panels."},
 };
 
 static const OptTable resize_table = {
@@ -794,22 +875,39 @@ static const OptTable launch_table = {
     .positional_json = "args",
 };
 
+static const OptTable close_table = {
+    .specs = close_specs,
+    .count = ARRAY_LEN(close_specs),
+    .usage = "close-window [options]",
+    .help = "Close panels and terminate the programs running in them.",
+};
+
+static const OptTable ls_table = {
+    .specs = ls_specs,
+    .count = ARRAY_LEN(ls_specs),
+    .usage = "ls [options]",
+    .help = "Print the panels as JSON. The os_panel field of each panel holds its settings in --os-panel syntax.",
+};
+
 typedef struct {
     const char *name;
     const OptTable *table;
     size_t size;
-    size_t no_response;
+    ptrdiff_t no_response;
 } ClientCommand;
 
 static const ClientCommand client_commands[] = {
-    {"resize-os-window", &resize_table, sizeof(ResizeOptions), RO(no_response)},
-    {"launch", &launch_table, sizeof(LaunchOptions), LO(no_response)},
+    {"resize-os-window", &resize_table, sizeof(ResizeOptions), (ptrdiff_t)RO(no_response)},
+    {"launch", &launch_table, sizeof(LaunchOptions), (ptrdiff_t)LO(no_response)},
+    {"close-window", &close_table, sizeof(CloseOptions), (ptrdiff_t)CO(no_response)},
+    {"ls", &ls_table, sizeof(LsOptions), -1},
 };
 
 static void client_usage(FILE *f)
 {
     fputs("Usage: ghostty-panel @ [--to ADDRESS] COMMAND [options] [args ...]\n\n"
-          "Control running panels. ADDRESS defaults to $GHOSTTY_PANEL_LISTEN_ON.\n"
+          "Control running panels. ADDRESS defaults to $GHOSTTY_PANEL_LISTEN_ON,\n"
+          "or to the socket of ghostty-panel-service when that is not set.\n"
           "Messages use the kitty remote control protocol.\n\nCommands:\n",
           f);
     for (size_t i = 0; i < ARRAY_LEN(client_commands); i++) fprintf(f, "  %s\n", client_commands[i].name);
@@ -865,15 +963,9 @@ int rc_client_main(int argc, char **argv)
         free(opts);
         return 1;
     }
-    if (!to || !*to) {
-        fprintf(stderr, "No address to connect to, use --to or run inside a panel started with --listen-on\n");
-        cli_free(cmd->table, opts);
-        free(opts);
-        return 1;
-    }
     StrList positional = {0};
     for (int k = i + 1 + first; k < argc; k++) strlist_push(&positional, argv[k]);
-    bool no_response = *(bool *)((char *)opts + cmd->no_response);
+    bool no_response = cmd->no_response >= 0 && *(bool *)((char *)opts + cmd->no_response);
     Buf json = {0};
     buf_append_str(&json, "{\"cmd\":");
     json_write_string(&json, cmd->name);
@@ -887,7 +979,7 @@ int rc_client_main(int argc, char **argv)
     cli_free(cmd->table, opts);
     free(opts);
 
-    char *address = rc_resolve_address(to);
+    char *address = to && *to ? rc_resolve_address(to) : rc_service_address();
     int fd = connect_address(address, err, sizeof err);
     free(address);
     int code = 1;

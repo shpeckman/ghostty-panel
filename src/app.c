@@ -344,7 +344,7 @@ void app_remove_panel(App *app, Panel *p)
         p->closing = true;
         app->graveyard = xrealloc(app->graveyard, (app->ngraveyard + 1) * sizeof(Panel *));
         app->graveyard[app->ngraveyard++] = p;
-        if (!app->npanels) app->running = false;
+        if (!app->npanels && !app->persistent) app->running = false;
         return;
     }
 }
@@ -425,7 +425,7 @@ static int setup_signals(void)
 int app_run(App *app)
 {
     app->signal_fd = setup_signals();
-    app->running = app->npanels > 0;
+    app->running = app->npanels > 0 || app->persistent;
     reap_children(app);
     struct pollfd *fds = NULL;
     size_t fds_cap = 0;

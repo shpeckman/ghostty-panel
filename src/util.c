@@ -298,3 +298,19 @@ bool write_all(int fd, const void *data, size_t len)
     }
     return true;
 }
+
+bool unix_sockaddr(const char *path, struct sockaddr_un *sa, socklen_t *len)
+{
+    memset(sa, 0, sizeof *sa);
+    sa->sun_family = AF_UNIX;
+    size_t n = strlen(path);
+    if (!n || n + 1 > sizeof sa->sun_path) return false;
+    if (path[0] == '@') {
+        memcpy(sa->sun_path + 1, path + 1, n - 1);
+        *len = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + n);
+    } else {
+        memcpy(sa->sun_path, path, n);
+        *len = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + n + 1);
+    }
+    return true;
+}
